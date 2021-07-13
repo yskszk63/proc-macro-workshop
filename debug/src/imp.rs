@@ -1,17 +1,52 @@
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Field, GenericArgument, GenericParam, Generics, Ident, LitStr, Path, PathArguments, PathSegment, Token, Type, TypePath, parse_quote};
+use syn::{Data, DeriveInput, Field, GenericArgument, Ident, LitStr, Token, Type, WhereClause, WherePredicate, parse_quote};
 use syn::parse::{Parse, ParseStream};
+use syn::visit::{self, Visit};
 
-struct DebugAttr(String);
+#[derive(Default)]
+struct DebugAttr {
+    bound: Option<LitStr>
+}
 
-impl Default for DebugAttr {
+impl DebugAttr {
+    fn from_derive_input(input: &DeriveInput) -> syn::Result<Self> {
+        for attr in &input.attrs {
+            if attr.path.is_ident("debug") {
+                return attr.parse_args();
+            }
+        }
+        Ok(Default::default())
+    }
+}
+
+impl Parse for DebugAttr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut bound = None;
+
+        while input.peek(Ident) {
+            let name = input.parse::<Ident>()?;
+            if name == "bound" {
+                input.parse::<Token![=]>()?;
+                bound = input.parse()?;
+            }
+        }
+
+        Ok(Self {
+            bound,
+        })
+    }
+}
+
+struct FieldDebugAttr(String);
+
+impl Default for FieldDebugAttr {
     fn default() -> Self {
         Self("{:?}".into())
     }
 }
 
-impl DebugAttr {
+impl FieldDebugAttr {
     fn from_field(field: &Field) -> syn::Result<Self> {
         for attr in &field.attrs {
             if attr.path.is_ident("debug") {
@@ -22,7 +57,7 @@ impl DebugAttr {
     }
 }
 
-impl Parse for DebugAttr {
+impl Parse for FieldDebugAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         input.parse::<Token![=]>()?;
         let val = input.parse::<LitStr>()?.value();
@@ -30,58 +65,74 @@ impl Parse for DebugAttr {
     }
 }
 
-struct CollectPhantomDataT<'a, 'b>(&'b mut Vec<&'a GenericArgument>);
+struct IsPhantomData<'ast, 'b>(&'b mut Option<&'ast Type>);
 
-fn infer_phantomdata_t<'a>(ty: &'a Type) -> Option<&'a Ident> {
-    if let Type::Path(TypePath { path: Path { segments, .. }, ..}) = ty {
-        if let Some(PathSegment { ident, arguments: PathArguments::AngleBracketed(args), }) = segments.last() {
-            if ident == "PhantomData" && args.args.len() == 1 {
-                if let Some(GenericArgument::Type(t)) = args.args.first() {
-                    if let Type::Path(TypePath { path: Path { segments, .. }, .. }) = t {
-                        if let Some(segment) = segments.first() {
-                            return Some(&segment.ident);
-                        }
-                    }
-                }
+impl<'ast, 'b> Visit<'ast> for IsPhantomData<'ast, 'b> {
+    fn visit_path(&mut self, i: &'ast syn::Path) {
+        if let Some(last) = i.segments.last() {
+            if last.ident == "PhantomData" {
+                visit::visit_path_segment(self, last)
             }
         }
     }
-    None
+    fn visit_generic_argument(&mut self, i: &'ast syn::GenericArgument) {
+        if let GenericArgument::Type(ty) = i {
+            *self.0 = Some(ty);
+        }
+    }
+}
+
+struct CollectPhantomDataT<'a, 'b>(&'b mut Vec<&'a Type>, bool);
+
+impl<'a, 'b> Visit<'a> for CollectPhantomDataT<'a, 'b> {
+    fn visit_type(&mut self, i: &'a Type) {
+        let mut phantomdatat = None;
+        IsPhantomData(&mut phantomdatat).visit_type(i);
+        if let Some(ty) = phantomdatat {
+            self.0.push(ty);
+        }
+    }
+}
+
+struct HasGenericArgument<'b>(&'b mut bool);
+
+impl<'ast, 'b> Visit<'ast> for HasGenericArgument<'b> {
+    fn visit_generic_argument(&mut self, _: &'ast syn::GenericArgument) {
+        *self.0 = true
+    }
+}
+
+struct CollectFieldTypes<'ast, 'b>(&'b mut Vec<&'ast Type>, Vec<&'ast Type>);
+
+impl<'ast, 'b> Visit<'ast> for CollectFieldTypes<'ast, 'b> {
+    fn visit_type(&mut self, i: &'ast Type) {
+        let mut has_genric_argument = false;
+        HasGenericArgument(&mut has_genric_argument).visit_type(i);
+        if !has_genric_argument && !self.1.contains(&&i) {
+            self.0.push(i);
+        }
+        visit::visit_type(self, i);
+    }
 }
 
 struct TargetField<'a> {
     ident: &'a Ident,
     debug: String,
-    phantomdata_t: Option<&'a Ident>,
 }
 
 impl<'a> TargetField<'a> {
     fn from(field: &'a Field) -> syn::Result<Self> {
         let ident = field.ident.as_ref().unwrap();
-        let DebugAttr(debug) = DebugAttr::from_field(field)?;
-        let phantomdata_t = infer_phantomdata_t(&field.ty);
+        let FieldDebugAttr(debug) = FieldDebugAttr::from_field(field)?;
         Ok(Self {
             ident,
             debug,
-            phantomdata_t,
         })
     }
 
     fn ident_str(&self) -> String {
         self.ident.to_string()
     }
-}
-
-fn add_trait_bounds(generics: &Generics, ignores: &Vec<&Ident>) -> Generics {
-    let mut generics = generics.clone();
-    for param in &mut generics.params {
-        if let GenericParam::Type(param) = param {
-            if !ignores.contains(&&param.ident) {
-                param.bounds.push(parse_quote! { ::std::fmt::Debug });
-            }
-        }
-    }
-    generics
 }
 
 fn debug(input: &DeriveInput) -> syn::Result<TokenStream> {
@@ -94,13 +145,31 @@ fn debug(input: &DeriveInput) -> syn::Result<TokenStream> {
         return Err(syn::Error::new_spanned(input, "enum or union not supported."));
     };
 
+    let where_clause = if let DebugAttr { bound: Some(bound) } = DebugAttr::from_derive_input(input)? {
+        let predicate = syn::parse_str::<WherePredicate>(&bound.value())?;
+        Some(parse_quote! {
+            where #predicate
+        })
+    } else {
+        let mut phantom_ts = vec![];
+        CollectPhantomDataT(&mut phantom_ts, false).visit_derive_input(input);
+        let mut generic_types = vec![];
+        CollectFieldTypes(&mut generic_types, phantom_ts).visit_derive_input(input);
+        let where_clause = generic_types.into_iter().map(|g| {
+            parse_quote! { #g: ::std::fmt::Debug }
+        }).collect::<Vec<WherePredicate>>();
+        if !where_clause.is_empty() {
+            Option::<WhereClause>::Some(parse_quote! { where #(#where_clause),* })
+        } else {
+            None
+        }
+    };
+
     let field_names = fields.iter().map(|f| f.ident).collect::<Vec<_>>();
     let field_strs = fields.iter().map(TargetField::ident_str).collect::<Vec<_>>();
     let debugs = fields.iter().map(|f| &f.debug).collect::<Vec<_>>();
-    let phantom_ts = fields.iter().filter_map(|f| f.phantomdata_t).collect::<Vec<_>>();
 
-    let generics = add_trait_bounds(&input.generics, &phantom_ts);
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let (impl_generics, ty_generics, _) = input.generics.split_for_impl();
 
     Ok(quote! {
         impl #impl_generics ::std::fmt::Debug for #ident #ty_generics #where_clause {
