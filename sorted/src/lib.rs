@@ -1,9 +1,13 @@
 use proc_macro::TokenStream;
 
+mod imp;
+
 #[proc_macro_attribute]
 pub fn sorted(args: TokenStream, input: TokenStream) -> TokenStream {
-    let _ = args;
-    let _ = input;
+    imp::sorted(args.into(), input.into()).into()
+}
 
-    unimplemented!()
+#[proc_macro_attribute]
+pub fn check(args: TokenStream, input: TokenStream) -> TokenStream {
+    imp::check(args.into(), input.into()).into()
 }
