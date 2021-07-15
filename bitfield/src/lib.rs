@@ -165,6 +165,7 @@ impl private::Store for u8 {
 
         match data {
             &mut [b] => {
+                let off = off as u32 % u8::BITS;
                 let m = mask << off;
                 data[0] = b & !m | (val << off)
             }
@@ -707,4 +708,18 @@ mod tests {
         assert_eq!(&[0b0000_0001, 0b0000_0000, 0b0000_0000, 0b0000_0000, 0b1111_1100][..], &data[..]);
     }
 
+    #[test]
+    fn test_edge() {
+        let mut data = [0u8; 4];
+        B9::set(0, &mut data, 0b1100_0011_1);
+        B6::set(9, &mut data, 0b101_010);
+        B13::set(9 + 6, &mut data, 0x1675);
+        B4::set(9 + 6 + 13, &mut data, 0b1110);
+
+        println!("{:x?}", data);
+        assert_eq!(B9::get(0, &data), 0b1100_0011_1);
+        assert_eq!(B6::get(9, &data), 0b101_010);
+        assert_eq!(B13::get(9 + 6, &data), 0x1675);
+        assert_eq!(B4::get(9 + 6 + 13, &data), 0b1110);
+    }
 }

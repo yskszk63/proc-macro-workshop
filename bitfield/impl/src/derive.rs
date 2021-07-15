@@ -1,4 +1,4 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Data, DeriveInput, Ident, Variant};
 
@@ -18,6 +18,10 @@ fn gen(input: DeriveInput) -> syn::Result<TokenStream> {
 
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(input.generics, "generics not supported."));
+    }
+
+    if data.variants.len().count_ones() != 1 {
+        return Err(syn::Error::new(Span::call_site(), "BitfieldSpecifier expected a number of variants which is a power of 2"));
     }
 
     let variants = data.variants.iter().map(VariantWrapper).collect::<Vec<_>>();
