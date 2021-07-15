@@ -14,6 +14,7 @@ pub use bitfield_impl::{bitfield, BitfieldSpecifier};
 
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
+use std::convert::{TryInto, TryFrom};
 
 pub mod checks {
     pub trait TotalSizeModEight<const N: usize> {}
@@ -283,50 +284,112 @@ impl private::Store for u64 {
 
 pub trait Specifier {
     const BITS: usize;
-    type Item: private::Load + private::Store;
     type Type;
 
     fn get(off: usize, data: &[u8]) -> Self::Type {
-        let item = <Self::Item as private::Load>::load(off, Self::BITS, data);
-        Self::to(item)
+        match Self::BITS {
+            0..=8 => Self::from_u8(<u8 as private::Load>::load(off, Self::BITS, data)),
+            9..=16 => Self::from_u16(<u16 as private::Load>::load(off, Self::BITS, data)),
+            17..=32 => Self::from_u32(<u32 as private::Load>::load(off, Self::BITS, data)),
+            33..=64 => Self::from_u64(<u64 as private::Load>::load(off, Self::BITS, data)),
+            _ => unreachable!(),
+        }
     }
 
     fn set(off: usize, data: &mut [u8], val: Self::Type) {
-        let item = Self::from(val);
-        <Self::Item as private::Store>::store(off, Self::BITS, data, item);
+        match Self::BITS {
+            0..=8 => <u8 as private::Store>::store(off, Self::BITS, data, Self::to_u8(val)),
+            9..=16 => <u16 as private::Store>::store(off, Self::BITS, data, Self::to_u16(val)),
+            17..=32 => <u32 as private::Store>::store(off, Self::BITS, data, Self::to_u32(val)),
+            33..=64 => <u64 as private::Store>::store(off, Self::BITS, data, Self::to_u64(val)),
+            _ => unreachable!(),
+        }
     }
 
-    fn from(me: Self::Type) -> Self::Item;
-    fn to(they: Self::Item) -> Self::Type;
+    fn from_u8(v: u8) -> Self::Type {
+        Self::from(v as u64)
+    }
+    fn from_u16(v: u16) -> Self::Type {
+        Self::from(v as u64)
+    }
+    fn from_u32(v: u32) -> Self::Type {
+        Self::from(v as u64)
+    }
+    fn from_u64(v: u64) -> Self::Type {
+        Self::from(v as u64)
+    }
+    fn from(v: u64) -> Self::Type;
+
+    fn to_u8(v: Self::Type) -> u8 {
+        Self::to(v) as u8
+    }
+    fn to_u16(v: Self::Type) -> u16 {
+        Self::to(v) as u16
+    }
+    fn to_u32(v: Self::Type) -> u32 {
+        Self::to(v) as u32
+    }
+    fn to_u64(v: Self::Type) -> u64 {
+        Self::to(v)
+    }
+    fn to(v: Self::Type) -> u64;
 }
 
 pub struct Bn<I, const N: usize>(PhantomData<I>);
 
-impl<I, const N: usize> Specifier for Bn<I, N> where I: private::Load + private::Store {
+impl<I, const N: usize> Specifier for Bn<I, N> where I: private::Load + private::Store + TryFrom<u8> + TryFrom<u16> + TryFrom<u32> + TryFrom<u64> + TryInto<u8> + TryInto<u16> + TryInto<u32> + TryInto<u64> {
     const BITS: usize = N;
-    type Item = I;
     type Type = I;
 
-    fn from(me: Self::Type) -> Self::Item {
-        me
+    fn from_u8(v: u8) -> Self::Type {
+        if let Ok(v) = Self::Type::try_from(v) { v } else { panic!() }
+    }
+    fn from_u16(v: u16) -> Self::Type {
+        if let Ok(v) = Self::Type::try_from(v) { v } else { panic!() }
+    }
+    fn from_u32(v: u32) -> Self::Type {
+        if let Ok(v) = Self::Type::try_from(v) { v } else { panic!() }
+    }
+    fn from_u64(v: u64) -> Self::Type {
+        if let Ok(v) = Self::Type::try_from(v) { v } else { panic!() }
+    }
+    fn from(v: u64) -> Self::Type {
+        if let Ok(v) = Self::Type::try_from(v) { v } else { panic!() }
     }
 
-    fn to(they: Self::Item) -> Self::Type {
-        they
+    fn to_u8(v: Self::Type) -> u8 {
+        if let Ok(v) = Self::Type::try_into(v) { v } else { panic!() }
+    }
+    fn to_u16(v: Self::Type) -> u16 {
+        if let Ok(v) = Self::Type::try_into(v) { v } else { panic!() }
+    }
+    fn to_u32(v: Self::Type) -> u32 {
+        if let Ok(v) = Self::Type::try_into(v) { v } else { panic!() }
+    }
+    fn to_u64(v: Self::Type) -> u64 {
+        if let Ok(v) = Self::Type::try_into(v) { v } else { panic!() }
+    }
+    fn to(v: Self::Type) -> u64 {
+        if let Ok(v) = Self::Type::try_into(v) { v } else { panic!() }
     }
 }
 
 impl Specifier for bool {
     const BITS: usize = 1;
-    type Item = u8;
     type Type = Self;
 
-    fn from(me: Self::Type) -> Self::Item {
-        if me { 1 } else { 0 }
+    fn from_u8(v: u8) -> Self::Type {
+        v == 1
+    }
+    fn from(v: u64) -> Self::Type {
+        Self::from_u8(v as u8)
     }
 
-    fn to(they: Self::Item) -> Self::Type {
-        they == 1
+    fn to_u8(v: Self::Type) -> u8 {
+        if v { 1 } else { 0 }
+    }
+    fn to(v: Self::Type) -> u64 {
+        Self::to_u8(v) as u64
     }
 }
 
