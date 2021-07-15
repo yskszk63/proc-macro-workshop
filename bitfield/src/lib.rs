@@ -15,6 +15,11 @@ pub use bitfield_impl::bitfield;
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
+pub mod checks {
+    pub trait TotalSizeModEight<const N: usize> {}
+    pub trait TotalSizeIsMultipleOfEightBits: TotalSizeModEight<0> {}
+}
+
 mod seal {
     use super::*;
 

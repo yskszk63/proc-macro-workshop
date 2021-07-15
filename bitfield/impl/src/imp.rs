@@ -48,7 +48,6 @@ fn gen_standard(input: &ItemStruct, fields: &FieldsNamed) -> syn::Result<TokenSt
         #(#attrs)*
         #[repr(C)]
         #vis struct #ident {
-            //data: [u8; (#(<#field_tys as ::bitfield::Specifier>::BITS)+*) / u8::BITS as usize],
             data: [u8; (((#(<#field_tys as ::bitfield::Specifier>::BITS)+*) - 1) >> 3) + 1],
         }
 
@@ -74,6 +73,9 @@ fn gen_standard(input: &ItemStruct, fields: &FieldsNamed) -> syn::Result<TokenSt
                 }
             )*
         }
+
+        impl ::bitfield::checks::TotalSizeModEight<{(0 #( + <#field_tys as ::bitfield::Specifier>::BITS )* ) % 8}> for #ident {}
+        impl ::bitfield::checks::TotalSizeIsMultipleOfEightBits for #ident {}
     })
 }
 
