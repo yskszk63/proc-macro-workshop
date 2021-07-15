@@ -13,306 +13,263 @@
 pub use bitfield_impl::bitfield;
 
 use std::marker::PhantomData;
+use std::ops::RangeInclusive;
 
 mod seal {
-    pub trait Load<T> {
-        fn load(off: usize, len: usize, data: &[u8]) -> T;
+    use super::*;
+
+    pub trait Num {
+        const BITS_RANGE: RangeInclusive<u32>;
+
+        fn assert_len(len: usize) {
+            if !Self::BITS_RANGE.contains(&(len as u32)) {
+                panic!();
+            }
+        }
+
+        fn view(off: usize, len: usize, data: &[u8]) -> &[u8] {
+            if !Self::BITS_RANGE.contains(&(len as u32)) {
+                panic!();
+            }
+
+            let begin = off >> 3;
+            let end = (off + len - 1) >> 3; // inclusive
+            if data.is_empty() || end + 1 > data.len() {
+                panic!();
+            }
+
+            &data[begin..=end]
+        }
+
+        fn view_mut(off: usize, len: usize, data: &mut [u8]) -> &mut [u8] {
+            if !Self::BITS_RANGE.contains(&(len as u32)) {
+                panic!();
+            }
+
+            let begin = off >> 3;
+            let end = (off + len - 1) >> 3; // inclusive
+            if data.is_empty() || end + 1 > data.len() {
+                panic!();
+            }
+
+            &mut data[begin..=end]
+        }
     }
 
-    pub trait Store<T> {
-        fn store(off: usize, len: usize, data: &mut [u8], val: T);
+    pub trait Load: Num {
+        fn load(off: usize, len: usize, data: &[u8]) -> Self;
+    }
+
+    pub trait Store: Num {
+        fn store(off: usize, len: usize, data: &mut [u8], val: Self);
     }
 }
 
-impl seal::Load<u8> for u8 {
+fn split(data: &[u8]) -> (u8, &[u8], u8) {
+    if data.len() < 2 {
+        panic!();
+    }
+
+    let h = data[0];
+    let t = data[data.len() - 1];
+    (h, &data[1..data.len() - 1], t)
+}
+
+impl seal::Num for u8 {
+    const BITS_RANGE: RangeInclusive<u32> = 1 ..= Self::BITS;
+}
+
+impl seal::Num for u16 {
+    const BITS_RANGE: RangeInclusive<u32> = u8::BITS + 1 ..= Self::BITS;
+}
+
+impl seal::Num for u32 {
+    const BITS_RANGE: RangeInclusive<u32> = u16::BITS + 1 ..= Self::BITS;
+}
+
+impl seal::Num for u64 {
+    const BITS_RANGE: RangeInclusive<u32> = u32::BITS + 1 ..= Self::BITS;
+}
+
+impl seal::Load for u8 {
     fn load(off: usize, len: usize, data: &[u8]) -> u8 {
-        if !(1..=u8::BITS as usize).contains(&len) {
-            panic!();
-        }
+        let data = <Self as seal::Num>::view(off, len, data);
+        let mask = Self::MAX >> (Self::BITS - len as u32);
+        let off = off as u32 % u8::BITS;
 
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
-        let mask = u8::MAX >> (u8::BITS - len as u32);
-        match &data[begin..=end] {
-            &[b] => u8::from_le_bytes([b]) >> (off as u32 % u8::BITS) & mask,
-            &[b, o] => (u16::from_le_bytes([b, o]) >> (off as u32 % u8::BITS)) as u8 & mask,
+        match data {
+            &[b] => u8::from_le_bytes([b]) >> off & mask,
+            &[b, o] => (u16::from_le_bytes([b, o]) >> off) as u8 & mask,
             _ => unreachable!(),
         }
     }
 }
 
-impl seal::Load<u16> for u16 {
+impl seal::Load for u16 {
     fn load(off: usize, len:usize, data: &[u8]) -> u16 {
-        if !(u8::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
+        let data = <Self as seal::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
-        match &data[begin..=end] {
-            &[b1, b2] => Self::from_le_bytes([b1, b2]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, o] => (u32::from_le_bytes([b1, b2, o, 0]) >> (off as u32 % Self::BITS)) as Self & mask,
+        let off = off as u32 % u8::BITS;
+
+        match data {
+            &[b1, b2] => Self::from_le_bytes([b1, b2]) >> off & mask,
+            &[b1, b2, o] => (u32::from_le_bytes([b1, b2, o, 0]) >> off) as Self & mask,
             z => unreachable!("{:?}", z),
         }
     }
 }
 
-impl seal::Load<u32> for u32 {
+impl seal::Load for u32 {
     fn load(off: usize, len: usize, data: &[u8]) -> u32 {
-        if !(u16::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!("{} {} {} {} {}", off, len, begin, end, data.len());
-        }
-
+        let data = <Self as seal::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
-        match &data[begin..=end] {
-            &[b1, b2, b3] => Self::from_le_bytes([b1, b2, b3, 0]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4] => Self::from_le_bytes([b1, b2, b3, b4]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4, o] => (u64::from_le_bytes([b1, b2, b3, b4, o, 0, 0, 0]) >> (off as u32 % Self::BITS)) as Self & mask,
+        let off = off as u32 % u8::BITS;
+
+        match data {
+            &[b1, b2, b3] => Self::from_le_bytes([b1, b2, b3, 0]) >> off & mask,
+            &[b1, b2, b3, b4] => Self::from_le_bytes([b1, b2, b3, b4]) >> off & mask,
+            &[b1, b2, b3, b4, o] => (u64::from_le_bytes([b1, b2, b3, b4, o, 0, 0, 0]) >> off) as Self & mask,
             z => unreachable!("{:?}", z),
         }
     }
 }
 
-impl seal::Load<u64> for u64 {
+impl seal::Load for u64 {
     fn load(off: usize, len: usize, data: &[u8]) -> u64 {
-        if !(u32::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
+        let data = <Self as seal::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
-        match &data[begin..=end] {
-            &[b1, b2, b3, b4, b5] => Self::from_le_bytes([b1, b2, b3, b4, b5, 0, 0, 0]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4, b5, b6] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, 0, 0]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4, b5, b6, b7] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, 0]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4, b5, b6, b7, b8] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, b8]) >> (off as u32 % Self::BITS) & mask,
-            &[b1, b2, b3, b4, b5, b6, b7, b8, o] => (u128::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, b8, o, 0, 0, 0, 0, 0, 0, 0]) >> (off as u32 % Self::BITS)) as Self & mask,
+        let off = off as u32 % u8::BITS;
+
+        match data {
+            &[b1, b2, b3, b4, b5] => Self::from_le_bytes([b1, b2, b3, b4, b5, 0, 0, 0]) >> off & mask,
+            &[b1, b2, b3, b4, b5, b6] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, 0, 0]) >> off & mask,
+            &[b1, b2, b3, b4, b5, b6, b7] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, 0]) >> off & mask,
+            &[b1, b2, b3, b4, b5, b6, b7, b8] => Self::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, b8]) >> off & mask,
+            &[b1, b2, b3, b4, b5, b6, b7, b8, o] => (u128::from_le_bytes([b1, b2, b3, b4, b5, b6, b7, b8, o, 0, 0, 0, 0, 0, 0, 0]) >> off) as Self & mask,
             z => unreachable!("{:?}", z),
         }
     }
 }
 
-impl seal::Store<u8> for u8 {
+impl seal::Store for u8 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u8) {
-        if !(1..=u8::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
-        let mask = u8::MAX >> (u8::BITS - len as u32);
+        let data = <Self as seal::Num>::view_mut(off, len, data);
+        let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
-        match &data[begin..=end] {
-            &[b] => {
+        match data {
+            &mut [b] => {
                 let m = mask << off;
-                data[begin] = b & !m | (val << off)
+                data[0] = b & !m | (val << off)
             }
-            &[h, t] => {
+            &mut [h, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as u16) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[1];
+                let (head, _, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[end] = t & mt | tail;
+                data[0] = h & !mh | head;
+                data[data.len() - 1] = t & mt | tail;
             }
             _ => unreachable!(),
         }
     }
 }
 
-impl seal::Store<u16> for u16 {
+impl seal::Store for u16 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u16) {
-        if !(u8::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
+        let data = <Self as seal::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
-        match &data[begin..=end] {
-            &[h, t] => {
+        match data {
+            &mut [h, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[1];
+                let (head, _, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[end] = t & mt | tail;
+                data[0] = h & !mh | head;
+                data[data.len() - 1] = t & mt | tail;
             }
-            &[h, _, t] => {
+            &mut [h, _, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as u32) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[2];
+                let (head, buf, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 2]);
-                data[end] = t & mt | tail;
+                let last = data.len() - 1;
+                data[0] = h & !mh | head;
+                data[1 .. last].copy_from_slice(buf);
+                data[last] = t & mt | tail;
             }
             _ => unreachable!(),
         }
     }
 }
 
-impl seal::Store<u32> for u32 {
+impl seal::Store for u32 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u32) {
-        if !(u16::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
+        let data = <Self as seal::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
-        match &data[begin..=end] {
-            &[h, _, t] => {
+        match data {
+            &mut [h, _, t] | &mut [h, _, _, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[2];
+                let (head, buf, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 2]);
-                data[end] = t & mt | tail;
+                let last = data.len() - 1;
+                data[0] = h & !mh | head;
+                data[1 .. last].copy_from_slice(buf);
+                data[last] = t & mt | tail;
             }
-            &[h, _, _, t] => {
-                let mh = u8::MAX << (off as u32 % u8::BITS);
-                let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
-                let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[3];
-
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 3]);
-                data[end] = t & mt | tail;
-            }
-            &[h, _, _, _, t] => {
+            &mut [h, _, _, _, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as u64) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[4];
+                let (head, buf, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 4]);
-                data[end] = t & mt | tail;
+                let last = data.len() - 1;
+                data[0] = h & !mh | head;
+                data[1 .. last].copy_from_slice(buf);
+                data[last] = t & mt | tail;
             }
             _ => unreachable!(),
         }
     }
 }
 
-impl seal::Store<u64> for u64 {
+impl seal::Store for u64 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u64) {
-        if !(u32::BITS as usize + 1..=Self::BITS as usize).contains(&len) {
-            panic!();
-        }
-
-        let begin = off >> 3;
-        let end = (off + len - 1) >> 3; // inclusive
-        if data.is_empty() || end + 1 > data.len() {
-            panic!();
-        }
-
+        let data = <Self as seal::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
-        match &data[begin..=end] {
-            &[h, _, _, _, t] => {
+        match data {
+            &mut [h, _, _, _, t] | &mut [h, _, _, _, _, t] | &mut [h, _, _, _, _, _, t] | &mut [h, _, _, _, _, _, _, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[4];
+                let (head, buf, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 4]);
-                data[end] = t & mt | tail;
+                let last = data.len() - 1;
+                data[0] = h & !mh | head;
+                data[1 .. last].copy_from_slice(buf);
+                data[last] = t & mt | tail;
             }
-            &[h, _, _, _, _, t] => {
-                let mh = u8::MAX << (off as u32 % u8::BITS);
-                let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
-                let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[5];
-
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 5]);
-                data[end] = t & mt | tail;
-            }
-            &[h, _, _, _, _, _, t] => {
-                let mh = u8::MAX << (off as u32 % u8::BITS);
-                let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
-                let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[6];
-
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 6]);
-                data[end] = t & mt | tail;
-            }
-            &[h, _, _, _, _, _, _, t] => {
-                let mh = u8::MAX << (off as u32 % u8::BITS);
-                let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
-                let buf = ((val as Self) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[7];
-
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 7]);
-                data[end] = t & mt | tail;
-            }
-            &[h, _, _, _, _, _, _, _, t] => {
+            &mut [h, _, _, _, _, _, _, _, t] => {
                 let mh = u8::MAX << (off as u32 % u8::BITS);
                 let mt = u8::MAX << ((off + len) as u32 % u8::BITS);
                 let buf = ((val as u128) << off).to_le_bytes();
-                let head = buf[0];
-                let tail = buf[8];
+                let (head, buf, tail) = split(&buf[..data.len()]);
 
-                data[begin] = h & !mh | head;
-                data[begin + 1 ..= end - 1].copy_from_slice(&buf[1 .. 8]);
-                data[end] = t & mt | tail;
+                let last = data.len() - 1;
+                data[0] = h & !mh | head;
+                data[1 .. last].copy_from_slice(buf);
+                data[last] = t & mt | tail;
             }
             _ => unreachable!(),
         }
@@ -321,20 +278,20 @@ impl seal::Store<u64> for u64 {
 
 pub trait Specifier {
     const BITS: usize;
-    type Item: seal::Load<Self::Item> + seal::Store<Self::Item>;
+    type Item: seal::Load + seal::Store;
 
     fn get(off: usize, data: &[u8]) -> Self::Item {
-        <Self::Item as seal::Load<_>>::load(off, Self::BITS, data)
+        <Self::Item as seal::Load>::load(off, Self::BITS, data)
     }
 
     fn set(off: usize, data: &mut [u8], val: Self::Item) {
-        <Self::Item as seal::Store<_>>::store(off, Self::BITS, data, val);
+        <Self::Item as seal::Store>::store(off, Self::BITS, data, val);
     }
 }
 
 pub struct Bn<I, const N: usize>(PhantomData<I>);
 
-impl<I, const N: usize> Specifier for Bn<I, N> where I: seal::Load<I> + seal::Store<I> {
+impl<I, const N: usize> Specifier for Bn<I, N> where I: seal::Load + seal::Store {
     const BITS: usize = N;
     type Item = I;
 }
