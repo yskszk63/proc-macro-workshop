@@ -10,7 +10,7 @@
 //
 // From the perspective of a user of this crate, they get all the necessary APIs
 // (macro, trait, struct) through the one bitfield crate.
-pub use bitfield_impl::bitfield;
+pub use bitfield_impl::{bitfield, BitfieldSpecifier};
 
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
@@ -20,7 +20,7 @@ pub mod checks {
     pub trait TotalSizeIsMultipleOfEightBits: TotalSizeModEight<0> {}
 }
 
-mod seal {
+mod private {
     use super::*;
 
     pub trait Num {
@@ -80,25 +80,25 @@ fn split(data: &[u8]) -> (u8, &[u8], u8) {
     (h, &data[1..data.len() - 1], t)
 }
 
-impl seal::Num for u8 {
+impl private::Num for u8 {
     const BITS_RANGE: RangeInclusive<u32> = 1 ..= Self::BITS;
 }
 
-impl seal::Num for u16 {
+impl private::Num for u16 {
     const BITS_RANGE: RangeInclusive<u32> = u8::BITS + 1 ..= Self::BITS;
 }
 
-impl seal::Num for u32 {
+impl private::Num for u32 {
     const BITS_RANGE: RangeInclusive<u32> = u16::BITS + 1 ..= Self::BITS;
 }
 
-impl seal::Num for u64 {
+impl private::Num for u64 {
     const BITS_RANGE: RangeInclusive<u32> = u32::BITS + 1 ..= Self::BITS;
 }
 
-impl seal::Load for u8 {
+impl private::Load for u8 {
     fn load(off: usize, len: usize, data: &[u8]) -> u8 {
-        let data = <Self as seal::Num>::view(off, len, data);
+        let data = <Self as private::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let off = off as u32 % u8::BITS;
 
@@ -110,9 +110,9 @@ impl seal::Load for u8 {
     }
 }
 
-impl seal::Load for u16 {
+impl private::Load for u16 {
     fn load(off: usize, len:usize, data: &[u8]) -> u16 {
-        let data = <Self as seal::Num>::view(off, len, data);
+        let data = <Self as private::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let off = off as u32 % u8::BITS;
 
@@ -124,9 +124,9 @@ impl seal::Load for u16 {
     }
 }
 
-impl seal::Load for u32 {
+impl private::Load for u32 {
     fn load(off: usize, len: usize, data: &[u8]) -> u32 {
-        let data = <Self as seal::Num>::view(off, len, data);
+        let data = <Self as private::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let off = off as u32 % u8::BITS;
 
@@ -139,9 +139,9 @@ impl seal::Load for u32 {
     }
 }
 
-impl seal::Load for u64 {
+impl private::Load for u64 {
     fn load(off: usize, len: usize, data: &[u8]) -> u64 {
-        let data = <Self as seal::Num>::view(off, len, data);
+        let data = <Self as private::Num>::view(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let off = off as u32 % u8::BITS;
 
@@ -156,9 +156,9 @@ impl seal::Load for u64 {
     }
 }
 
-impl seal::Store for u8 {
+impl private::Store for u8 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u8) {
-        let data = <Self as seal::Num>::view_mut(off, len, data);
+        let data = <Self as private::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
@@ -181,9 +181,9 @@ impl seal::Store for u8 {
     }
 }
 
-impl seal::Store for u16 {
+impl private::Store for u16 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u16) {
-        let data = <Self as seal::Num>::view_mut(off, len, data);
+        let data = <Self as private::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
@@ -213,9 +213,9 @@ impl seal::Store for u16 {
     }
 }
 
-impl seal::Store for u32 {
+impl private::Store for u32 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u32) {
-        let data = <Self as seal::Num>::view_mut(off, len, data);
+        let data = <Self as private::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
@@ -247,9 +247,9 @@ impl seal::Store for u32 {
     }
 }
 
-impl seal::Store for u64 {
+impl private::Store for u64 {
     fn store(off: usize, len:usize, data: &mut [u8], val: u64) {
-        let data = <Self as seal::Num>::view_mut(off, len, data);
+        let data = <Self as private::Num>::view_mut(off, len, data);
         let mask = Self::MAX >> (Self::BITS - len as u32);
         let val = val & mask;
 
@@ -283,22 +283,51 @@ impl seal::Store for u64 {
 
 pub trait Specifier {
     const BITS: usize;
-    type Item: seal::Load + seal::Store;
+    type Item: private::Load + private::Store;
+    type Type;
 
-    fn get(off: usize, data: &[u8]) -> Self::Item {
-        <Self::Item as seal::Load>::load(off, Self::BITS, data)
+    fn get(off: usize, data: &[u8]) -> Self::Type {
+        let item = <Self::Item as private::Load>::load(off, Self::BITS, data);
+        Self::to(item)
     }
 
-    fn set(off: usize, data: &mut [u8], val: Self::Item) {
-        <Self::Item as seal::Store>::store(off, Self::BITS, data, val);
+    fn set(off: usize, data: &mut [u8], val: Self::Type) {
+        let item = Self::from(val);
+        <Self::Item as private::Store>::store(off, Self::BITS, data, item);
     }
+
+    fn from(me: Self::Type) -> Self::Item;
+    fn to(they: Self::Item) -> Self::Type;
 }
 
 pub struct Bn<I, const N: usize>(PhantomData<I>);
 
-impl<I, const N: usize> Specifier for Bn<I, N> where I: seal::Load + seal::Store {
+impl<I, const N: usize> Specifier for Bn<I, N> where I: private::Load + private::Store {
     const BITS: usize = N;
     type Item = I;
+    type Type = I;
+
+    fn from(me: Self::Type) -> Self::Item {
+        me
+    }
+
+    fn to(they: Self::Item) -> Self::Type {
+        they
+    }
+}
+
+impl Specifier for bool {
+    const BITS: usize = 1;
+    type Item = u8;
+    type Type = Self;
+
+    fn from(me: Self::Type) -> Self::Item {
+        if me { 1 } else { 0 }
+    }
+
+    fn to(they: Self::Item) -> Self::Type {
+        they == 1
+    }
 }
 
 pub type B1 = Bn<u8, 1>;
@@ -369,7 +398,7 @@ pub type B64 = Bn<u64, 64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::seal::*;
+    use super::private::*;
 
     #[test]
     fn test_load8() {

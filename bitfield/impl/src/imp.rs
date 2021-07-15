@@ -63,11 +63,11 @@ fn gen_standard(input: &ItemStruct, fields: &FieldsNamed) -> syn::Result<TokenSt
             }
 
             #(
-                pub fn #getters(&self) -> <#field_tys as ::bitfield::Specifier>::Item {
+                pub fn #getters(&self) -> <#field_tys as ::bitfield::Specifier>::Type {
                     let off = Self::OFFSET[#field_seq];
                     <#field_tys as ::bitfield::Specifier>::get(off, &self.data[..])
                 }
-                pub fn #setters(&mut self, val: <#field_tys as ::bitfield::Specifier>::Item) {
+                pub fn #setters(&mut self, val: <#field_tys as ::bitfield::Specifier>::Type) {
                     let off = Self::OFFSET[#field_seq];
                     <#field_tys as ::bitfield::Specifier>::set(off, &mut self.data[..], val)
                 }
