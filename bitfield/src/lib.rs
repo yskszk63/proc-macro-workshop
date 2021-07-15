@@ -27,12 +27,6 @@ mod private {
     pub trait Num {
         const BITS_RANGE: RangeInclusive<u32>;
 
-        fn assert_len(len: usize) {
-            if !Self::BITS_RANGE.contains(&(len as u32)) {
-                panic!();
-            }
-        }
-
         fn view(off: usize, len: usize, data: &[u8]) -> &[u8] {
             if !Self::BITS_RANGE.contains(&(len as u32)) {
                 panic!();
@@ -338,7 +332,7 @@ pub trait Specifier {
 
 pub struct Bn<I, const N: usize>(PhantomData<I>);
 
-impl<I, const N: usize> Specifier for Bn<I, N> where I: private::Load + private::Store + TryFrom<u8> + TryFrom<u16> + TryFrom<u32> + TryFrom<u64> + TryInto<u8> + TryInto<u16> + TryInto<u32> + TryInto<u64> {
+impl<I, const N: usize> Specifier for Bn<I, N> where I: TryFrom<u8> + TryFrom<u16> + TryFrom<u32> + TryFrom<u64> + TryInto<u8> + TryInto<u16> + TryInto<u32> + TryInto<u64> {
     const BITS: usize = N;
     type Type = I;
 
